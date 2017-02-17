@@ -26,5 +26,4 @@ def parse(filename):
             order_list.append(order(position, [int(i) for i in f.readline().split()], N_PRODUCTS))
     drone_list = [drone(warehouse_list[0].position, N_PRODUCTS) for i in xrange(N_DRONE)]
 
-    return warehouse_list, order_list, drone_list
-    
+    return warehouse_list, order_list, drone_list, PRODUCTS_WEIGHTS
