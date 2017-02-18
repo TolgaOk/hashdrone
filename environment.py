@@ -1,5 +1,6 @@
 import numpy as np
 import parser as pr
+from Queue import Queue
 
     # rewardcuyu uyarmayi unutma
 
@@ -13,7 +14,7 @@ class cross_entrophy():
 
     def livings_canerator(self, n_creatures, n_iterations, fitness_function):
         self.tribe = np.random.multivariate_normal(mean=self.mean, cov=np.diag(self.std), size=n_creatures)
-        return self.tribe
+        return np.reshape(self.tribe, (-1, self.out_dim, self.in_dim))
 
     def new_generation(self, rewards, election_ratio):
         assert len(rewards) == self.tribe.shape[0], "Reward's length is different than the tribe's length."
@@ -23,13 +24,14 @@ class cross_entrophy():
         self.std = np.std(survivors, axis=0)
         self.history.append(np.mean(rewards))
 
-def action_converter(output_net, model, sess, warehouses, orders, drone, max_weight, prod_catalogue, mean, std):
+def action_converter(output_net, model, sess, warehouses, orders, drone, max_weight, prod_catalogue, mean, std, pose_mean, pose_std):
     def cypher_to_product(to_be_decoded):
         products = np.squeeze(model.decode(sess, np.expand_dims(to_be_decoded, 0)))*std + mean
 
         return np.argmax(products), np.rint(np.max(products))
 
     def spatial_constraint(x, y, data):
+        x, y = (model.pose_decode(sess, np.expand_dims(np.array([x, y]), 0))*std+mean)[0]
         dists = np.sqrt(np.array([(x-datum.position[0])**2+(y-datum.position[1])**2 for datum in data]).astype(np.float32))
         return np.argmin(dists)
 
@@ -68,48 +70,132 @@ def action_converter(output_net, model, sess, warehouses, orders, drone, max_wei
     #reward parametresi --> penalti
 
 class env(object):
-    def __init__(self, max_turn, warehouse_list, order_list, drone_list, catalogue):
+    def __init__(self, agent, model, sess, max_turn, warehouse_list, order_list, drone_list, catalogue, max_weight, mean, std, pose_mean, pose_std):
         self.reward = 0.0
         self.turn = 0
+        self.max_weight = max_weight
+        self.agent = agent
+        self.mean, self.std, self.pose_mean, self.pose_std = mean, std, pose_mean, pose_std
         self.max_turn = max_turn
         self.warehouse_list = warehouse_list
         self.order_list = order_list
         self.drone_list = drone_list
         self.catalogue = catalogue
+        self.model = model
+        self.sess = sess
+        self.queue_list = [Queue() for i in xrange(len(drone_list))]
+        self.empty_drone = [True for i in xrange(len(drone_list))]
+        self.are_queues_filled = len(drone_list)
 
-    def update(action):
+    def play(self):
+        def state():
+            wr_products = np.mean(self.model.encode(self.sess, np.array([wr.products for wr in self.warehouse_list])), axis=0)
+            or_products = np.mean(self.model.encode(self.sess, np.array([o.products for o in self.order_list])), axis=0)
+            dr_products = np.mean(self.model.encode(self.sess, np.array([d.products for d in self.drone_list])), axis=0)
+
+            wr_position = np.mean(self.model.pose_encode(self.sess, np.array([wr.position for wr in self.warehouse_list])), axis=0)
+            or_position = np.mean(self.model.pose_encode(self.sess, np.array([o.position for o in self.order_list])), axis=0)
+            dr_position = np.mean(self.model.pose_encode(self.sess, np.array([d.position for d in self.drone_list])), axis=0)
+
+            return np.concatenate([wr_position, wr_products, or_position, or_products, dr_position, dr_products])
+
+        action = np.dot(self.agent, state())
+        google_output = action_converter(action, self.model, self.sess, self.warehouse_list, self.order_list, self.drone_list, self.max_weight, self.catalogue, self.mean, self.std, self.pose_mean, self.pose_std)
+        i_drone = int(google_output.split()[0])
+
+        self.queue_list[i_drone].put(google_output)
+        if self.empty_drone[i_drone]:
+            empty_drone[i_drone] = False
+            if self.are_queues_filled == 1:
+                self.are_queues_filled = len(self.drone_list)
+
+                available_drone_indexes  = [index for index, dr in enumerate(self.drone_list) if dr.is_available]
+                command_list = [self.queue_list[index].get() for index in available_drone_indexes]
+
+                for command in command_list:
+                    assign_work(command)
+
+                turn_to_go = min([drone.until_available for drone in self.drone_list])
+                drones_to_update = [drone for drone in self.drone_list if drone.until_available == turn_to_go]
+                drones_to_update = sorted(drones_to_update, key=lambda dr: dr.command[2], reverse=True)
+
+                for drone in drones_to_update:
+                    update(drone.command)
+                    drone.is_available = True
+                    drone.until_available = 0
+                    drone.current_command = ""
+
+                self.turn += turn_to_go
+                # turn mechanix
+            else:
+                self.are_queues_filled -= 1
+
+
+
+    def assign_work(self, command):
+
+        def shortest(drone, target):
+            x_drone, y_drone, x_target, y_target = *(drone.position+target.position)
+            return np.ceil(np.sqrt((x_drone - x_target)**2 + (y_drone - y_target)**2))
+
+        act_params = command.split()
+        discrete_action = act_params[1]
+        i_drone = int(act_params[0])
+
+        if discrete_action == "W":
+            self.drone_list[i_drone].until_available += int(act_params[2])
+            self.drone_list[i_drone].is_available = False
+            self.drone_list[i_drone].current_command = command
+        elif discrete_action == "L" or discrete_action == "U":
+            self.drone_list[i_drone].until_available += shortest(self.drone_list[i_drone], self.warehouse_list[int(act_params[2])]) + 1
+            self.drone_list[i_drone].is_available = False
+            self.drone_list[i_drone].current_command = command
+        elif discrete_action == "D":
+            self.drone_list[i_drone].until_available += shortest(self.drone_list[i_drone], self.order_list[int(act_params[2])]) + 1
+            self.drone_list[i_drone].is_available = False
+            self.drone_list[i_drone].current_command = command
+
+
+    def update(self, action):
+
+
         def shortest(drone, target):
             x_drone, y_drone, x_target, y_target = *(drone.position+target.position)
             return np.ceil(np.sqrt((x_drone - x_target)**2 + (y_drone - y_target)**2))
 
         act_params = action.split()
-        if act_params[1] == "w":
-            self.turn += int(act_params[2])
-        elif act_params[1] == "L":
-            self.turn += shortest(self.drone_list[int(act_params[0])], self.warehouse_list[int(act_params[2])]) + 1
-            self.drone_list[int(act_params[0])].position[:] = self.warehouse_list[int(act_params[2])].position[:]
+        discrete_action = act_params[1]
+        i_drone = int(act_params[0])
+        if discrete_action == "W":
+            pass
+        elif discrete_action == "L":
+
+            self.drone_list[i_drone].position[:] = self.warehouse_list[int(act_params[2])].position[:]
             index_pro, n_pro= map(int, act_params[3:])
-            self.drone_list[int(act_params[0])].products[index_pro] += n_pro
-            self.drone_list[int(act_params[0])].load += catalogue[index_pro]*n_pro
+            self.drone_list[i_drone].products[index_pro] += n_pro
+            self.drone_list[i_drone].load += catalogue[index_pro]*n_pro
             self.warehouse_list[int(act_params[2])].products[index_pro] -= n_pro
-        elif act_params[1] == "U":
-            self.turn += shortest(self.drone_list[int(act_params[0])], self.warehouse_list[int(act_params[2])]) + 1
-            self.drone_list[int(act_params[0])].position[:] = self.warehouse_list[int(act_params[2])].position[:]
+        elif discrete_action == "U":
+
+            self.drone_list[i_drone].position[:] = self.warehouse_list[int(act_params[2])].position[:]
             index_pro, n_pro= map(int, act_params[3:])
-            self.drone_list[int(act_params[0])].products[index_pro] -= n_pro
-            self.drone_list[int(act_params[0])].load -= catalogue[index_pro]*n_pro
+            self.drone_list[i_drone].products[index_pro] -= n_pro
+            self.drone_list[i_drone].load -= catalogue[index_pro]*n_pro
             self.warehouse_list[int(act_params[2])].products[index_pro] += n_pro
-        elif act_params[1] == "D":
-            self.turn += shortest(self.drone_list[int(act_params[0])], self.order_list[int(act_params[2])]) + 1
-            self.drone_list[int(act_params[0])].position[:] = self.order_list[int(act_params[2])].position[:]
+        elif discrete_action == "D":
+
+            self.drone_list[i_drone].position[:] = self.order_list[int(act_params[2])].position[:]
             index_pro, n_pro= map(int, act_params[3:])
-            self.drone_list[int(act_params[0])].products[index_pro] -= n_pro
-            self.drone_list[int(act_params[0])].load -= catalogue[index_pro]*n_pro
+            self.drone_list[i_drone].products[index_pro] -= n_pro
+            self.drone_list[i_drone].load -= catalogue[index_pro]*n_pro
             is_done = self.order_list[int(act_params[2])].deliver(index_pro)
-            self.reward += (self.max_turn - self.turn)/float(self.max_turn)
+            if is_done:
+                self.reward += (self.max_turn - self.turn)/float(self.max_turn)
+
+
 
 # reward functionu ile updater function yazilacak.
-#kac turn? command list? kac turn almasi gerekiyor her bir commandin? CPU, kacinci drone'u kontrol etmeli? 
+#kac turn? command list? kac turn almasi gerekiyor her bir commandin? CPU, kacinci drone'u kontrol etmeli?
 def main():
     import dimension_reduction as dr
     import tensorflow as tf

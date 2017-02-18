@@ -28,3 +28,9 @@ class drone():
         self.position = position
         self.load = 0
         self.products = [0 for i in xrange(n_products)]
+        self.is_available = True
+        self.until_available = 0
+        self.current_command = ""
+        
+
+print sorted(["U", "L"])
