@@ -13,7 +13,7 @@ class order():
         for i in products:
             self.products[i] += 1
         self.undelivered_products = sum([0 if i == 0 else 1 for i in self.products])
-    def deliver(index_product):
+    def deliver(self, index_product):
         self.products[index_product] = 0
         if self.undelivered_products > 1:
             self.undelivered_products -= 1
@@ -31,6 +31,3 @@ class drone():
         self.is_available = True
         self.until_available = 0
         self.current_command = ""
-        
-
-print sorted(["U", "L"])

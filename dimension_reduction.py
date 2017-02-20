@@ -48,10 +48,10 @@ class autoencoder():
 
     def pose_encoder(self, pose_in):
         self.pose_in = pose_in
-        self.pose = tf.placeholder(tf.float32, [None, pose_in])
+        self.pose = tf.placeholder(tf.float32, [None, pose_in], name="pose")
         self.pose_lr_tf = tf.placeholder(tf.float32)
         self.pose_is_decode = tf.placeholder(tf.bool)
-        self.pose_cypher = tf.placeholder(tf.float32, [None, pose_in])
+        self.pose_cypher = tf.placeholder(tf.float32, [None, pose_in], name="pose_cypher")
 
         fc_init = tf.contrib.layers.xavier_initializer()
         fc_1 = tf.contrib.layers.fully_connected(inputs=self.pose, num_outputs=pose_in, activation_fn=tf.nn.relu, weights_initializer=fc_init)
@@ -72,10 +72,8 @@ class autoencoder():
 
     def pose_encode(self, session, data):
         dummy_cypher = np.zeros((data.shape[0], self.pose_in), dtype=np.float32)
-        return session.run(self.pose_fc_bottleneck, feed_dict={self.pose: data, self.pose_is_decode: False, self.pose_cypher: dummy_cypher})
+        return session.run(self.pose_bottleneck, feed_dict={self.pose: data, self.pose_is_decode: False, self.pose_cypher: dummy_cypher})
 
     def pose_decode(self, session, data):
         dummy_input = np.zeros((data.shape[0], self.pose_in), dtype=np.float32)
-        return session.run(self.fc_out, feed_dict={self.pose: dummy_input, self.pose_is_decode: True, self.pose_cypher: data})
-
-    
+        return session.run(self.pose_fc_out, feed_dict={self.pose: dummy_input, self.pose_is_decode: True, self.pose_cypher: data})

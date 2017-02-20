@@ -8,12 +8,13 @@ class cross_entrophy():
     def __init__(self, in_dim, out_dim):
         self.in_dim = in_dim
         self.out_dim = out_dim
-        self.mean = np.random.normal(size=in_dim*out_dim)
-        self.std = np.random.uniform(0.1, 0.7, size=in_dim*out_dim)
+        self.mean = np.random.normal(size=(in_dim,out_dim))
+        self.std = np.random.uniform(0.001, 0.0015, size=(in_dim,out_dim))
         self.history = []
 
-    def livings_canerator(self, n_creatures, n_iterations, fitness_function):
-        self.tribe = np.random.multivariate_normal(mean=self.mean, cov=np.diag(self.std), size=n_creatures)
+    def livings_canerator(self, n_creatures):
+        self.tribe = np.array([np.random.multivariate_normal(self.mean[i, :], np.diag(self.std[i, :]), n_creatures).T
+                        for i in range(self.in_dim)])
         return np.reshape(self.tribe, (-1, self.out_dim, self.in_dim))
 
     def new_generation(self, rewards, election_ratio):
@@ -24,6 +25,7 @@ class cross_entrophy():
         self.std = np.std(survivors, axis=0)
         self.history.append(np.mean(rewards))
 
+
 def action_converter(output_net, model, sess, warehouses, orders, drone, max_weight, prod_catalogue, mean, std, pose_mean, pose_std):
     def cypher_to_product(to_be_decoded):
         products = np.squeeze(model.decode(sess, np.expand_dims(to_be_decoded, 0)))*std + mean
@@ -31,7 +33,8 @@ def action_converter(output_net, model, sess, warehouses, orders, drone, max_wei
         return np.argmax(products), np.rint(np.max(products))
 
     def spatial_constraint(x, y, data):
-        x, y = (model.pose_decode(sess, np.expand_dims(np.array([x, y]), 0))*std+mean)[0]
+        a = np.array([x, y], dtype=np.float32)
+        x, y = (model.pose_decode(sess, np.expand_dims(a, 0))*pose_std+pose_mean)[0]
         dists = np.sqrt(np.array([(x-datum.position[0])**2+(y-datum.position[1])**2 for datum in data]).astype(np.float32))
         return np.argmin(dists)
 
@@ -52,20 +55,20 @@ def action_converter(output_net, model, sess, warehouses, orders, drone, max_wei
         load_index = spatial_constraint(load_position[0], load_position[1], warehouses)
         constrained_product = load_product[1] if warehouses[load_index].products[load_product[0]] >= load_product[1] else warehouses[load_index].products[load_product[0]]
         constrained_product = weight_constraint(load_product[0], constrained_product, drone[chosen_drone])
-        return "{} {} {} {} {}".format(chosen_drone, "L", load_index, load_product[0], constrained_product)
+        return "{} {} {} {} {}".format(chosen_drone, "L", load_index, load_product[0], int(constrained_product))
     elif chosen_action == 2:
         unload_position = output_net[38:40]
         unload_product = cypher_to_product(output_net[40:42])
         unload_index = spatial_constraint(unload_position[0], unload_position[1], warehouses)
         constrained_product = unload_product[1] if drone[chosen_drone].products[unload_product[0]] >= unload_product[1] else drone[chosen_drone].products[unload_product[0]]
-        return "{} {} {} {} {}".format(chosen_drone, "U", unload_index, unload_product[0], constrained_product)
+        return "{} {} {} {} {}".format(chosen_drone, "U", unload_index, unload_product[0], int(constrained_product))
     elif chosen_action == 3:
         delivery_position = output_net[42:44]
         delivery_product = cypher_to_product(output_net[44:46])
         delivery_index = spatial_constraint(delivery_position[0], delivery_position[1], orders)
         constrained_product = delivery_product[1] if drone[chosen_drone].products[delivery_product[0]] >= delivery_product[1] else drone[chosen_drone].products[delivery_product[0]]
         constrained_product = constrained_product if orders[delivery_index].products[delivery_product[0]] == constrained_product else 0
-        return "{} {} {} {} {}".format(chosen_drone, "D", delivery_index, delivery_product[0], constrained_product)
+        return "{} {} {} {} {}".format(chosen_drone, "D", delivery_index, delivery_product[0], int(constrained_product))
 
     #reward parametresi --> penalti
 
@@ -100,42 +103,56 @@ class env(object):
             return np.concatenate([wr_position, wr_products, or_position, or_products, dr_position, dr_products])
 
         action = np.dot(self.agent, state())
+        action /= np.max(action[:30])
+        action += np.random.normal(size=47, scale=0.9)
+        #print np.max(action[:30])
         google_output = action_converter(action, self.model, self.sess, self.warehouse_list, self.order_list, self.drone_list, self.max_weight, self.catalogue, self.mean, self.std, self.pose_mean, self.pose_std)
         i_drone = int(google_output.split()[0])
 
         self.queue_list[i_drone].put(google_output)
-        if self.empty_drone[i_drone]:
-            empty_drone[i_drone] = False
-            if self.are_queues_filled == 1:
-                self.are_queues_filled = len(self.drone_list)
-
+        if True:
+            #self.empty_drone[i_drone] = False
+            flag = sum([1 for q in self.queue_list if q.empty()])
+            if not flag:
+                #self.are_queues_filled -= 1
                 available_drone_indexes  = [index for index, dr in enumerate(self.drone_list) if dr.is_available]
                 command_list = [self.queue_list[index].get() for index in available_drone_indexes]
 
+                # works assigned
                 for command in command_list:
-                    assign_work(command)
+                    self.assign_work(command)
 
                 turn_to_go = min([drone.until_available for drone in self.drone_list])
                 drones_to_update = [drone for drone in self.drone_list if drone.until_available == turn_to_go]
-                drones_to_update = sorted(drones_to_update, key=lambda dr: dr.command[2], reverse=True)
+                drones_to_update = sorted(drones_to_update, key=lambda dr: dr.current_command[2], reverse=True)
 
+                # drones completed their work
                 for drone in drones_to_update:
-                    update(drone.command)
+                    self.update(drone.current_command)
                     drone.is_available = True
-                    drone.until_available = 0
                     drone.current_command = ""
 
+                # drones updated
+                for  drone in self.drone_list:
+                    drone.until_available -= turn_to_go
+
+                # queue management
+                # for i in available_drone_indexes:
+                #     if self.queue_list[i].empty():
+                #         #self.are_queues_filled += 1
+                #         self.empty_drone[i] = True
+
                 self.turn += turn_to_go
-                # turn mechanix
             else:
-                self.are_queues_filled -= 1
+                #self.are_queues_filled -= 1
+                pass
 
 
 
     def assign_work(self, command):
 
         def shortest(drone, target):
-            x_drone, y_drone, x_target, y_target = *(drone.position+target.position)
+            x_drone, y_drone, x_target, y_target = drone.position+target.position
             return np.ceil(np.sqrt((x_drone - x_target)**2 + (y_drone - y_target)**2))
 
         act_params = command.split()
@@ -158,11 +175,6 @@ class env(object):
 
     def update(self, action):
 
-
-        def shortest(drone, target):
-            x_drone, y_drone, x_target, y_target = *(drone.position+target.position)
-            return np.ceil(np.sqrt((x_drone - x_target)**2 + (y_drone - y_target)**2))
-
         act_params = action.split()
         discrete_action = act_params[1]
         i_drone = int(act_params[0])
@@ -173,29 +185,26 @@ class env(object):
             self.drone_list[i_drone].position[:] = self.warehouse_list[int(act_params[2])].position[:]
             index_pro, n_pro= map(int, act_params[3:])
             self.drone_list[i_drone].products[index_pro] += n_pro
-            self.drone_list[i_drone].load += catalogue[index_pro]*n_pro
+            self.drone_list[i_drone].load += self.catalogue[index_pro]*n_pro
             self.warehouse_list[int(act_params[2])].products[index_pro] -= n_pro
         elif discrete_action == "U":
 
             self.drone_list[i_drone].position[:] = self.warehouse_list[int(act_params[2])].position[:]
             index_pro, n_pro= map(int, act_params[3:])
             self.drone_list[i_drone].products[index_pro] -= n_pro
-            self.drone_list[i_drone].load -= catalogue[index_pro]*n_pro
+            self.drone_list[i_drone].load -= self.catalogue[index_pro]*n_pro
             self.warehouse_list[int(act_params[2])].products[index_pro] += n_pro
         elif discrete_action == "D":
 
             self.drone_list[i_drone].position[:] = self.order_list[int(act_params[2])].position[:]
             index_pro, n_pro= map(int, act_params[3:])
             self.drone_list[i_drone].products[index_pro] -= n_pro
-            self.drone_list[i_drone].load -= catalogue[index_pro]*n_pro
+            self.drone_list[i_drone].load -= self.catalogue[index_pro]*n_pro
             is_done = self.order_list[int(act_params[2])].deliver(index_pro)
-            if is_done:
-                self.reward += (self.max_turn - self.turn)/float(self.max_turn)
+            # if is_done:
+            #     self.reward += (self.max_turn - self.turn)/float(self.max_turn)
 
 
-
-# reward functionu ile updater function yazilacak.
-#kac turn? command list? kac turn almasi gerekiyor her bir commandin? CPU, kacinci drone'u kontrol etmeli?
 def main():
     import dimension_reduction as dr
     import tensorflow as tf
@@ -210,15 +219,30 @@ def main():
     std = np.std(data, axis=0)
     data = (data-mean)/std
 
+
+    warehouse_data = np.vstack([np.array(w.position, dtype=np.float32) for w in warehouse_list])
+    order_data = np.vstack([np.array(o.position, dtype=np.float32) for o in order_list])
+    random_data = np.vstack([np.random.randint(0, 10, 2).astype(np.float32) for i in xrange(240)])
+
+    pose_data = np.concatenate([warehouse_data, order_data, random_data])
+    pose_mean = np.mean(pose_data, axis=0)
+    pose_std = np.std(pose_data, axis=0)
+    pose_data = (pose_data-pose_mean)/pose_std
+
+
+
     sess = tf.InteractiveSession()
     autoen = dr.autoencoder(400, 2)
+    autoen.pose_encoder(2)
 
     sess.run(tf.global_variables_initializer())
     autoen.train(sess, 1, data, 0.001)
 
+    autoen.pose_train(sess, 10, pose_data, 0.001)
+
     for i in xrange(100):
         net_out = np.random.normal(size=47)
-        print action_converter(net_out, autoen, sess, warehouse_list, order_list, drone_list, 200, product_catalogue, mean, std)
+        print action_converter(net_out, autoen, sess, warehouse_list, order_list, drone_list, 200, product_catalogue, mean, std, pose_mean, pose_std)
 
 if __name__ == "__main__":
     main()
