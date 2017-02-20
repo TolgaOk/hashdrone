@@ -26,7 +26,7 @@ class cross_entrophy():
         self.history.append(np.mean(rewards))
 
 
-def action_converter(output_net, model, sess, warehouses, orders, drone, max_weight, prod_catalogue, mean, std, pose_mean, pose_std):
+def action_converter(output_net, model, sess, warehouses, orders, drone, max_weight, prod_catalogue, mean, std, pose_mean, pose_std, chosen_drone):
     def cypher_to_product(to_be_decoded):
         products = np.squeeze(model.decode(sess, np.expand_dims(to_be_decoded, 0)))*std + mean
 
@@ -44,27 +44,27 @@ def action_converter(output_net, model, sess, warehouses, orders, drone, max_wei
         return n_product if (available)/pw>=n_product else int(available/pw)
 
     discrete_actions_dict = {0:"W", 1:"L", 2:"U", 3:"D"}
-    chosen_drone = np.argmax(output_net[:30])
-    chosen_action = np.argmax(output_net[30:34])
+    #chosen_drone = np.argmax(output_net[:30])
+    chosen_action = np.argmax(output_net[:2])
+    # if chosen_action == 0:
+    #     wait_turn = max(int(output_net[16]), 0)
+    #     return "{} {} {}".format(chosen_drone, "W", wait_turn)
     if chosen_action == 0:
-        wait_turn = max(int(output_net[46]), 0)
-        return "{} {} {}".format(chosen_drone, "W", wait_turn)
-    elif chosen_action == 1:
-        load_position = output_net[34:36]
-        load_product = cypher_to_product(output_net[36:38])
+        load_position = output_net[2:4]
+        load_product = cypher_to_product(output_net[4:6])
         load_index = spatial_constraint(load_position[0], load_position[1], warehouses)
         constrained_product = load_product[1] if warehouses[load_index].products[load_product[0]] >= load_product[1] else warehouses[load_index].products[load_product[0]]
         constrained_product = weight_constraint(load_product[0], constrained_product, drone[chosen_drone])
         return "{} {} {} {} {}".format(chosen_drone, "L", load_index, load_product[0], int(constrained_product))
-    elif chosen_action == 2:
-        unload_position = output_net[38:40]
-        unload_product = cypher_to_product(output_net[40:42])
-        unload_index = spatial_constraint(unload_position[0], unload_position[1], warehouses)
-        constrained_product = unload_product[1] if drone[chosen_drone].products[unload_product[0]] >= unload_product[1] else drone[chosen_drone].products[unload_product[0]]
-        return "{} {} {} {} {}".format(chosen_drone, "U", unload_index, unload_product[0], int(constrained_product))
-    elif chosen_action == 3:
-        delivery_position = output_net[42:44]
-        delivery_product = cypher_to_product(output_net[44:46])
+    # elif chosen_action == 2:
+    #     unload_position = output_net[8:10]
+    #     unload_product = cypher_to_product(output_net[10:12])
+    #     unload_index = spatial_constraint(unload_position[0], unload_position[1], warehouses)
+    #     constrained_product = unload_product[1] if drone[chosen_drone].products[unload_product[0]] >= unload_product[1] else drone[chosen_drone].products[unload_product[0]]
+    #     return "{} {} {} {} {}".format(chosen_drone, "U", unload_index, unload_product[0], int(constrained_product))
+    elif chosen_action == 1:
+        delivery_position = output_net[6:8]
+        delivery_product = cypher_to_product(output_net[8:10])
         delivery_index = spatial_constraint(delivery_position[0], delivery_position[1], orders)
         constrained_product = delivery_product[1] if drone[chosen_drone].products[delivery_product[0]] >= delivery_product[1] else drone[chosen_drone].products[delivery_product[0]]
         constrained_product = constrained_product if orders[delivery_index].products[delivery_product[0]] == constrained_product else 0
@@ -90,7 +90,7 @@ class env(object):
         self.empty_drone = [True for i in xrange(len(drone_list))]
         self.are_queues_filled = len(drone_list)
 
-    def play(self):
+    def play(self, drone_index):
         def state():
             wr_products = np.mean(self.model.encode(self.sess, np.array([wr.products for wr in self.warehouse_list])), axis=0)
             or_products = np.mean(self.model.encode(self.sess, np.array([o.products for o in self.order_list])), axis=0)
@@ -100,13 +100,16 @@ class env(object):
             or_position = np.mean(self.model.pose_encode(self.sess, np.array([o.position for o in self.order_list])), axis=0)
             dr_position = np.mean(self.model.pose_encode(self.sess, np.array([d.position for d in self.drone_list])), axis=0)
 
-            return np.concatenate([wr_position, wr_products, or_position, or_products, dr_position, dr_products])
+            drone_state = np.zeros((len(self.drone_list)), dtype=np.float32)
+            drone_state[drone_index] = 1.0
+            return np.concatenate([drone_state, wr_position, wr_products, or_position, or_products, dr_position, dr_products])
+
 
         action = np.dot(self.agent, state())
-        action /= np.max(action[:30])
-        action += np.random.normal(size=47, scale=0.9)
+        # action /= np.max(action[:30])
+        # action += np.random.normal(size=47, scale=0.9)
         #print np.max(action[:30])
-        google_output = action_converter(action, self.model, self.sess, self.warehouse_list, self.order_list, self.drone_list, self.max_weight, self.catalogue, self.mean, self.std, self.pose_mean, self.pose_std)
+        google_output = action_converter(action, self.model, self.sess, self.warehouse_list, self.order_list, self.drone_list, self.max_weight, self.catalogue, self.mean, self.std, self.pose_mean, self.pose_std, drone_index)
         i_drone = int(google_output.split()[0])
 
         self.queue_list[i_drone].put(google_output)

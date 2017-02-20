@@ -30,18 +30,19 @@ autoencoder.pose_encoder(2)
 
 sess.run(tf.global_variables_initializer())
 
-autoencoder.train(sess, 1, data, 0.001)
-autoencoder.pose_train(sess, 1, pose_data, 0.001)
+autoencoder.train(sess, 2001, data, 0.001)
+autoencoder.pose_train(sess, 2001, pose_data, 0.001)
 
-ce = cross_entrophy(12, 47)
+ce = cross_entrophy(42, 10)
 
 for i in xrange(1):
     rewards = list()
     creatures = ce.livings_canerator(20)
     for creature in creatures:
         environment = env(creature, autoencoder, sess, 500, warehouse_list, order_list, drone_list, product_catalogue, 200, mean, std, pose_mean, pose_std)
-        for it in xrange(1000):
-            environment.play()
+        for it in xrange(500):
+            drone_index = it%30
+            environment.play(drone_index)
 
         print environment.turn
         print [q.qsize() for q in environment.queue_list], sum([q.qsize() for q in environment.queue_list])
