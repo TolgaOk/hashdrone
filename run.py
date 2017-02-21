@@ -35,16 +35,21 @@ autoencoder.pose_train(sess, 2001, pose_data, 0.001)
 
 ce = cross_entrophy(42, 10)
 
-for i in xrange(1):
-    rewards = list()
+for i in xrange(800):
     creatures = ce.livings_canerator(20)
+    rewards = list()
+
     for creature in creatures:
         environment = env(creature, autoencoder, sess, 500, warehouse_list, order_list, drone_list, product_catalogue, 200, mean, std, pose_mean, pose_std)
-        for it in xrange(500):
+        for it in xrange(5000):
             drone_index = it%30
             environment.play(drone_index)
 
-        print environment.turn
-        print [q.qsize() for q in environment.queue_list], sum([q.qsize() for q in environment.queue_list])
         rewards.append(environment.reward)
-        print rewards
+        print rewards[-1]
+    ce.new_generation(rewards, 0.5)
+    print np.max(rewards)
+        # print environment.turn
+        # print [q.qsize() for q in environment.queue_list], sum([q.qsize() for q in environment.queue_list])
+        # print rewards
+print ce.history

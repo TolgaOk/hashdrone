@@ -8,17 +8,17 @@ class cross_entrophy():
     def __init__(self, in_dim, out_dim):
         self.in_dim = in_dim
         self.out_dim = out_dim
-        self.mean = np.random.normal(size=(in_dim,out_dim))
-        self.std = np.random.uniform(0.001, 0.0015, size=(in_dim,out_dim))
+        self.mean = np.random.normal(size=(out_dim,in_dim))
+        self.std = np.random.uniform(0.001, 0.0015, size=(out_dim,in_dim))
         self.history = []
 
     def livings_canerator(self, n_creatures):
-        self.tribe = np.array([np.random.multivariate_normal(self.mean[i, :], np.diag(self.std[i, :]), n_creatures).T
-                        for i in range(self.in_dim)])
-        return np.reshape(self.tribe, (-1, self.out_dim, self.in_dim))
+        self.tribe = np.reshape(np.array([np.random.multivariate_normal(self.mean[i, :], np.diag(self.std[i, :]), n_creatures).T
+                        for i in range(self.out_dim)]), (-1, self.out_dim, self.in_dim))
+        return self.tribe
 
     def new_generation(self, rewards, election_ratio):
-        assert len(rewards) == self.tribe.shape[0], "Reward's length is different than the tribe's length."
+        # assert len(rewards) == self.tribe.shape[0], "Reward's length is different than the tribe's length."
         survivors_index = np.argsort(rewards)[len(rewards)*election_ratio:]
         survivors = self.tribe[survivors_index,:]
         self.mean = np.mean(survivors, axis=0)
@@ -65,7 +65,8 @@ def action_converter(output_net, model, sess, warehouses, orders, drone, max_wei
     elif chosen_action == 1:
         delivery_position = output_net[6:8]
         delivery_product = cypher_to_product(output_net[8:10])
-        delivery_index = spatial_constraint(delivery_position[0], delivery_position[1], orders)
+        valid_orders = [order for order in orders if order.products[delivery_product[0]]>0]
+        delivery_index = spatial_constraint(delivery_position[0], delivery_position[1], valid_orders)
         constrained_product = delivery_product[1] if drone[chosen_drone].products[delivery_product[0]] >= delivery_product[1] else drone[chosen_drone].products[delivery_product[0]]
         constrained_product = constrained_product if orders[delivery_index].products[delivery_product[0]] == constrained_product else 0
         return "{} {} {} {} {}".format(chosen_drone, "D", delivery_index, delivery_product[0], int(constrained_product))
@@ -106,18 +107,13 @@ class env(object):
 
 
         action = np.dot(self.agent, state())
-        # action /= np.max(action[:30])
-        # action += np.random.normal(size=47, scale=0.9)
-        #print np.max(action[:30])
         google_output = action_converter(action, self.model, self.sess, self.warehouse_list, self.order_list, self.drone_list, self.max_weight, self.catalogue, self.mean, self.std, self.pose_mean, self.pose_std, drone_index)
         i_drone = int(google_output.split()[0])
 
         self.queue_list[i_drone].put(google_output)
         if True:
-            #self.empty_drone[i_drone] = False
             flag = sum([1 for q in self.queue_list if q.empty()])
             if not flag:
-                #self.are_queues_filled -= 1
                 available_drone_indexes  = [index for index, dr in enumerate(self.drone_list) if dr.is_available]
                 command_list = [self.queue_list[index].get() for index in available_drone_indexes]
 
@@ -139,15 +135,8 @@ class env(object):
                 for  drone in self.drone_list:
                     drone.until_available -= turn_to_go
 
-                # queue management
-                # for i in available_drone_indexes:
-                #     if self.queue_list[i].empty():
-                #         #self.are_queues_filled += 1
-                #         self.empty_drone[i] = True
-
                 self.turn += turn_to_go
             else:
-                #self.are_queues_filled -= 1
                 pass
 
 
@@ -204,8 +193,8 @@ class env(object):
             self.drone_list[i_drone].products[index_pro] -= n_pro
             self.drone_list[i_drone].load -= self.catalogue[index_pro]*n_pro
             is_done = self.order_list[int(act_params[2])].deliver(index_pro)
-            # if is_done:
-            #     self.reward += (self.max_turn - self.turn)/float(self.max_turn)
+            if is_done:
+                self.reward += 100*(self.max_turn - self.turn)/float(self.max_turn)
 
 
 def main():
